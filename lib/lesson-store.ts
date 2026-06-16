@@ -6,6 +6,7 @@ export interface Lesson {
   chords: Array<{ name: string; time: number }>
   sections: Array<{ name: string; startTime: number; endTime: number }>
   audioUrl?: string
+  duration?: number
   uploadedAt: string
 }
 

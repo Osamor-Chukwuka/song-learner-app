@@ -2,29 +2,56 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Lesson } from '@/lib/lesson-store'
-import { Play, Pause, SkipBack, SkipForward } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PianoVisualizer } from './piano-visualizer'
 import { GuitarVisualizer } from './guitar-visualizer'
+import { generateChordAudio } from '@/lib/audio-synthesis'
 
 interface LessonPlayerProps {
   lesson: Lesson
 }
 
 export function LessonPlayer({ lesson }: LessonPlayerProps) {
-  const audioRef = useRef<HTMLAudioElement>(null)
+  const songAudioRef = useRef<HTMLAudioElement>(null)
+  const guideAudioRef = useRef<HTMLAudioElement>(null)
+  
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [currentChord, setCurrentChord] = useState<string | null>(null)
   const [nextChord, setNextChord] = useState<string | null>(null)
-  const [currentSection, setCurrentSection] = useState<string>('Intro')
+  const [currentSection, setCurrentSection] = useState<string>('')
   const [activeTab, setActiveTab] = useState<'piano' | 'guitar'>('piano')
+  
+  // Volume controls
+  const [songVolume, setSongVolume] = useState(0.8)
+  const [guideVolume, setGuideVolume] = useState(0.6)
+  const [masterVolume, setMasterVolume] = useState(1)
 
-  // Simulate audio duration for demo
-  const estimatedDuration = lesson.sections[lesson.sections.length - 1]?.endTime || 30
+  // Initialize audio elements with volumes
+  useEffect(() => {
+    if (songAudioRef.current) {
+      songAudioRef.current.volume = songVolume * masterVolume
+    }
+  }, [songVolume, masterVolume])
 
-  // Update current chord based on time
+  useEffect(() => {
+    if (guideAudioRef.current) {
+      guideAudioRef.current.volume = guideVolume * masterVolume
+    }
+  }, [guideVolume, masterVolume])
+
+  // Set initial duration from lesson
+  useEffect(() => {
+    setDuration(lesson.duration || 30)
+    if (currentSection === '') {
+      const initialSection = lesson.sections[0]?.name || 'Intro'
+      setCurrentSection(initialSection)
+    }
+  }, [lesson])
+
+  // Update current chord and section based on playback time
   useEffect(() => {
     const chord = lesson.chords.find((c, i) => {
       const nextChord = lesson.chords[i + 1]
@@ -43,59 +70,96 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
     }
   }, [currentTime, lesson])
 
-  const handlePlayPause = () => {
-    if (audioRef.current) {
+  // Generate guide audio for current chord
+  useEffect(() => {
+    if (currentChord && guideAudioRef.current && isPlaying) {
+      // Generate new guide audio for current chord
+      const audioBuffer = generateChordAudio(currentChord, 2)
+      const blob = new Blob([audioBuffer], { type: 'audio/wav' })
+      const url = URL.createObjectURL(blob)
+      guideAudioRef.current.src = url
+      guideAudioRef.current.play().catch(() => {
+        // Silent catch - may fail if guide is disabled
+      })
+    }
+  }, [currentChord, isPlaying])
+
+  // Sync guide audio to song playback
+  useEffect(() => {
+    if (songAudioRef.current && guideAudioRef.current) {
       if (isPlaying) {
-        audioRef.current.pause()
+        songAudioRef.current.play().catch(() => console.log('[v0] Play blocked'))
       } else {
-        audioRef.current.play()
+        songAudioRef.current.pause()
+        guideAudioRef.current.pause()
       }
-      setIsPlaying(!isPlaying)
+    }
+  }, [isPlaying])
+
+  const handlePlayPause = () => {
+    if (!songAudioRef.current) return
+
+    if (isPlaying) {
+      songAudioRef.current.pause()
+      if (guideAudioRef.current) guideAudioRef.current.pause()
+      setIsPlaying(false)
+    } else {
+      songAudioRef.current.play().catch(() => console.log('[v0] Play blocked'))
+      setIsPlaying(true)
     }
   }
 
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime)
+    if (songAudioRef.current) {
+      setCurrentTime(songAudioRef.current.currentTime)
     }
   }
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current) {
-      setDuration(audioRef.current.duration)
+    if (songAudioRef.current) {
+      const actualDuration = songAudioRef.current.duration
+      if (!isNaN(actualDuration)) {
+        setDuration(actualDuration)
+      }
     }
   }
 
   const handleSeek = (time: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = time
+    if (songAudioRef.current) {
+      songAudioRef.current.currentTime = time
       setCurrentTime(time)
+    }
+    if (guideAudioRef.current) {
+      guideAudioRef.current.currentTime = time
     }
   }
 
   const handleSkip = (seconds: number) => {
-    const newTime = Math.max(0, Math.min(estimatedDuration, currentTime + seconds))
+    const newTime = Math.max(0, Math.min(duration, currentTime + seconds))
     handleSeek(newTime)
   }
 
   const formatTime = (time: number) => {
+    if (isNaN(time)) return '0:00'
     const minutes = Math.floor(time / 60)
     const seconds = Math.floor(time % 60)
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
-  const progressPercent = (currentTime / estimatedDuration) * 100
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
   return (
     <div className="space-y-6">
-      {/* Audio element - simulated for demo */}
+      {/* Audio elements */}
       <audio
-        ref={audioRef}
+        ref={songAudioRef}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={() => setIsPlaying(false)}
         src={lesson.audioUrl}
+        crossOrigin="anonymous"
       />
+      <audio ref={guideAudioRef} crossOrigin="anonymous" />
 
       {/* Main Player Card */}
       <div className="rounded-lg border border-border bg-card p-8">
@@ -138,7 +202,7 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
         <div className="mb-8">
           <div className="mb-2 flex justify-between text-sm text-muted-foreground">
             <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(estimatedDuration)}</span>
+            <span>{formatTime(duration)}</span>
           </div>
 
           {/* Progress bar */}
@@ -147,7 +211,7 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()
               const percent = (e.clientX - rect.left) / rect.width
-              handleSeek(percent * estimatedDuration)
+              handleSeek(percent * duration)
             }}
           >
             <div
@@ -157,14 +221,74 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
           </div>
         </div>
 
+        {/* Volume Controls */}
+        <div className="mb-8 rounded-lg bg-muted/30 p-6 space-y-4">
+          <div className="text-sm font-semibold text-foreground mb-4">Audio Controls</div>
+          
+          {/* Master Volume */}
+          <div className="flex items-center gap-4">
+            <Volume2 className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            <div className="flex-1">
+              <label className="block text-xs text-muted-foreground mb-2">Master Volume</label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={masterVolume * 100}
+                onChange={(e) => setMasterVolume(parseInt(e.target.value) / 100)}
+                className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-10 text-right">{Math.round(masterVolume * 100)}%</span>
+          </div>
+
+          {/* Song Volume */}
+          <div className="flex items-center gap-4">
+            <div className="flex-shrink-0 w-4 text-center">
+              <span className="text-xs font-medium text-primary">🎵</span>
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs text-muted-foreground mb-2">Song Volume</label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={songVolume * 100}
+                onChange={(e) => setSongVolume(parseInt(e.target.value) / 100)}
+                className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-10 text-right">{Math.round(songVolume * 100)}%</span>
+          </div>
+
+          {/* Guide Volume */}
+          <div className="flex items-center gap-4">
+            <div className="flex-shrink-0 w-4 text-center">
+              <span className="text-xs font-medium text-accent">🎹</span>
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs text-muted-foreground mb-2">Guide Volume</label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={guideVolume * 100}
+                onChange={(e) => setGuideVolume(parseInt(e.target.value) / 100)}
+                className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-accent"
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-10 text-right">{Math.round(guideVolume * 100)}%</span>
+          </div>
+        </div>
+
         {/* Chord Timeline */}
         <div className="mb-8 rounded-lg bg-muted/30 p-4">
-          <div className="text-xs text-muted-foreground mb-3">Chord Timeline</div>
+          <div className="text-xs text-muted-foreground mb-3 font-semibold">Chord Timeline</div>
           <div className="space-y-2">
             {lesson.chords.map((chord, i) => {
               const isActive = currentTime >= chord.time && (!lesson.chords[i + 1] || currentTime < lesson.chords[i + 1].time)
               return (
-                <div key={i} className="flex items-center justify-between text-sm">
+                <div key={i} className="flex items-center justify-between text-sm cursor-pointer hover:bg-muted/30 p-2 rounded transition" onClick={() => handleSeek(chord.time)}>
                   <div className={`flex items-center gap-2 ${isActive ? 'text-primary font-semibold' : 'text-muted-foreground'}`}>
                     <div className={`h-2 w-2 rounded-full ${isActive ? 'bg-primary' : 'bg-muted-foreground'}`}></div>
                     {chord.name}
@@ -210,7 +334,7 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
         </div>
 
         <div className="mt-4 text-center text-sm text-muted-foreground">
-          {isPlaying ? 'Now playing...' : 'Paused'}
+          {isPlaying ? 'Now playing with guide audio...' : 'Paused'}
         </div>
       </div>
 

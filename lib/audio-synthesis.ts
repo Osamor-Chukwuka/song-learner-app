@@ -38,6 +38,105 @@ const chordNotes: Record<string, string[]> = {
   'Am': ['A', 'C', 'E'],
 }
 
+/**
+ * Generate chord audio as a WAV file (Uint8Array)
+ * Returns raw WAV data that can be played as audio
+ */
+export function generateChordAudio(chordName: string, durationSeconds: number = 2): Uint8Array {
+  const sampleRate = 44100
+  const frameCount = sampleRate * durationSeconds
+  const channels = 1
+  const bitsPerSample = 16
+
+  // Get the notes for this chord
+  const notes = chordNotes[chordName] || ['C', 'E', 'G']
+
+  // Create audio data
+  const audioData = new Float32Array(frameCount)
+
+  // Generate waveform by summing sine waves for each note
+  for (let i = 0; i < frameCount; i++) {
+    let sample = 0
+    const t = i / sampleRate
+
+    // Add each note with envelope
+    notes.forEach((note) => {
+      const freq = noteFrequencies[note] || 440
+      const envelope = Math.exp(-t * 1.5) // Exponential decay
+      sample += Math.sin(2 * Math.PI * freq * t) * envelope * 0.3
+    })
+
+    // Apply attack/release envelope
+    const attackTime = 0.05
+    const releaseTime = durationSeconds - 0.1
+    let envValue = 1
+
+    if (t < attackTime) {
+      envValue = t / attackTime // Attack
+    } else if (t > releaseTime) {
+      envValue = Math.max(0, (durationSeconds - t) / 0.1) // Release
+    }
+
+    audioData[i] = (sample / notes.length) * envValue * 0.8
+  }
+
+  // Convert to PCM
+  const pcm = encodeWAV(audioData, sampleRate, channels, bitsPerSample)
+  return pcm
+}
+
+/**
+ * Encode Float32 audio data to WAV format
+ */
+function encodeWAV(
+  audioData: Float32Array,
+  sampleRate: number,
+  channels: number,
+  bitsPerSample: number
+): Uint8Array {
+  const bytesPerSample = bitsPerSample / 8
+  const blockAlign = channels * bytesPerSample
+  const byteRate = sampleRate * blockAlign
+
+  // Create the WAV file
+  const WAV_HEADER_SIZE = 44
+  const fileSize = audioData.length * bytesPerSample + WAV_HEADER_SIZE - 8
+
+  const buffer = new ArrayBuffer(WAV_HEADER_SIZE + audioData.length * bytesPerSample)
+  const view = new DataView(buffer)
+
+  // WAV header
+  const writeString = (offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i))
+    }
+  }
+
+  writeString(0, 'RIFF')
+  view.setUint32(4, fileSize, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true) // Subchunk1Size
+  view.setUint16(20, 1, true) // AudioFormat (1 = PCM)
+  view.setUint16(22, channels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, bitsPerSample, true)
+  writeString(36, 'data')
+  view.setUint32(40, audioData.length * bytesPerSample, true)
+
+  // Write audio data
+  let offset = WAV_HEADER_SIZE
+  for (let i = 0; i < audioData.length; i++) {
+    const s = Math.max(-1, Math.min(1, audioData[i])) // Clamp
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+    offset += bytesPerSample
+  }
+
+  return new Uint8Array(buffer)
+}
+
 export class AudioSynthesizer {
   private audioContext: AudioContext
   private masterGain: GainNode
@@ -140,28 +239,4 @@ export function getSynthesizer(): AudioSynthesizer {
     synthesizer = new AudioSynthesizer()
   }
   return synthesizer
-}
-
-/**
- * Generate a demo audio URL for testing
- * Returns a data URL with a simple tone
- */
-export function generateDemoAudioUrl(): string {
-  // Generate a simple sine wave using Web Audio API
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-  const sampleRate = audioContext.sampleRate
-  const duration = 30 // 30 seconds
-  const channels = 1
-  const frameCount = audioContext.sampleRate * duration
-
-  const audioBuffer = audioContext.createAudioBuffer(channels, frameCount, sampleRate)
-  const audioData = audioBuffer.getChannelData(0)
-
-  // Generate a simple tone
-  const frequency = 440 // A4
-  for (let i = 0; i < frameCount; i++) {
-    audioData[i] = Math.sin((i / sampleRate) * frequency * 2 * Math.PI) * 0.3
-  }
-
-  return ''
 }

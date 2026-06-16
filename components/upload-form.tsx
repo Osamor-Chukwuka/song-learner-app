@@ -33,6 +33,26 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
     }
   }
 
+  // Helper to get audio duration
+  const getAudioDuration = (file: File): Promise<number> => {
+    return new Promise((resolve, reject) => {
+      const audio = new Audio()
+      const url = URL.createObjectURL(file)
+
+      audio.onloadedmetadata = () => {
+        URL.revokeObjectURL(url)
+        resolve(audio.duration)
+      }
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(url)
+        reject(new Error('Failed to load audio metadata'))
+      }
+
+      audio.src = url
+    })
+  }
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError('')
@@ -50,25 +70,29 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
     setIsLoading(true)
 
     try {
-      // Simulate analysis delay (in real app, this would call the Python backend)
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      // Get real audio duration
+      const duration = await getAudioDuration(file)
+      console.log('[v0] Audio duration:', duration)
 
-      // For demo: generate mock chord data
-      const mockChords = [
-        { name: 'C', time: 0 },
-        { name: 'F', time: 4 },
-        { name: 'G', time: 8 },
-        { name: 'C', time: 12 },
-        { name: 'Am', time: 16 },
-        { name: 'F', time: 20 },
-        { name: 'G', time: 24 },
-      ]
+      // Generate chord timestamps based on actual duration
+      // Spread chords evenly throughout the song
+      const numChords = Math.max(5, Math.min(12, Math.floor(duration / 4)))
+      const chordSequence = ['C', 'G', 'Am', 'F', 'D', 'Dm', 'A', 'E', 'B', 'Em', 'Bm']
+      const mockChords = Array.from({ length: numChords }, (_, i) => ({
+        name: chordSequence[i % chordSequence.length],
+        time: (i / numChords) * duration,
+      }))
 
+      // Generate sections based on duration
+      const sectionDuration = duration / 3
       const mockSections = [
-        { name: 'Intro', startTime: 0, endTime: 4 },
-        { name: 'Verse', startTime: 4, endTime: 16 },
-        { name: 'Chorus', startTime: 16, endTime: 28 },
+        { name: 'Intro', startTime: 0, endTime: sectionDuration * 0.5 },
+        { name: 'Verse', startTime: sectionDuration * 0.5, endTime: sectionDuration * 1.5 },
+        { name: 'Chorus', startTime: sectionDuration * 1.5, endTime: duration },
       ]
+
+      // Create blob URL for audio playback
+      const audioUrl = URL.createObjectURL(file)
 
       // Store in localStorage
       const lesson = {
@@ -77,6 +101,8 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
         artist: artist.trim() || 'Unknown Artist',
         chords: mockChords,
         sections: mockSections,
+        audioUrl, // Store the blob URL
+        duration, // Store actual duration
         uploadedAt: new Date().toISOString(),
       }
 
