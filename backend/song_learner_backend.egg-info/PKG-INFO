@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: song-learner-backend
+Version: 0.1.0
+Summary: Chord detection backend for Song Learner
+Requires-Python: >=3.9
+Requires-Dist: fastapi[standard]>=0.128.1
+Requires-Dist: librosa>=0.10.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: soundfile>=0.12.1
