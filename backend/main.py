@@ -279,16 +279,26 @@ async def analyze_audio(file: fastapi.UploadFile = fastapi.File(...)) -> dict:
     Returns:
         JSON with detected chords and metadata
     """
+    print(f"[v0] Received upload: {file.filename}, content-type: {file.content_type}")
+    
     try:
         # Read audio file
         audio_data = await file.read()
+        print(f"[v0] Read {len(audio_data)} bytes from file")
+        
+        if len(audio_data) == 0:
+            raise ValueError("File is empty")
         
         # Detect chords with improved algorithm
+        print("[v0] Starting chord detection...")
         chords = detect_chords_from_audio(audio_data)
+        print(f"[v0] Detected {len(chords)} chords")
         
         # Load audio to get duration
+        print("[v0] Loading audio for duration...")
         audio, sr = librosa.load(io.BytesIO(audio_data), sr=22050)
         duration = librosa.get_duration(y=audio, sr=sr)
+        print(f"[v0] Duration: {duration}s")
         
         # Generate sections based on chord changes
         sections = []
@@ -300,38 +310,52 @@ async def analyze_audio(file: fastapi.UploadFile = fastapi.File(...)) -> dict:
                 if i < len(chords) - 1:
                     sections.append({
                         'name': section_names[i],
-                        'startTime': chords[i]['time'],
-                        'endTime': chords[i + 1]['time']
+                        'startTime': float(chords[i]['time']),
+                        'endTime': float(chords[i + 1]['time'])
                     })
             
             # Add final section
             if chords:
                 sections.append({
                     'name': section_names[min(len(chords), len(section_names) - 1)],
-                    'startTime': chords[-1]['time'],
-                    'endTime': duration
+                    'startTime': float(chords[-1]['time']),
+                    'endTime': float(duration)
                 })
         else:
             # Default sections
             sections = [
-                {'name': 'Intro', 'startTime': 0, 'endTime': duration * 0.33},
-                {'name': 'Verse', 'startTime': duration * 0.33, 'endTime': duration * 0.66},
-                {'name': 'Chorus', 'startTime': duration * 0.66, 'endTime': duration}
+                {'name': 'Intro', 'startTime': 0.0, 'endTime': float(duration * 0.33)},
+                {'name': 'Verse', 'startTime': float(duration * 0.33), 'endTime': float(duration * 0.66)},
+                {'name': 'Chorus', 'startTime': float(duration * 0.66), 'endTime': float(duration)}
             ]
+        
+        # Ensure chord data is serializable
+        clean_chords = []
+        for chord in chords:
+            clean_chords.append({
+                'name': str(chord['name']),
+                'time': float(chord['time']),
+                'confidence': float(chord.get('confidence', 0.0))
+            })
+        
+        print(f"[v0] Returning {len(clean_chords)} chords and {len(sections)} sections")
         
         return {
             'success': True,
-            'duration': round(duration, 2),
-            'chords': chords,
+            'duration': float(round(duration, 2)),
+            'chords': clean_chords,
             'sections': sections,
-            'message': f'Detected {len(chords)} stable chord changes'
+            'message': f'Detected {len(clean_chords)} stable chord changes'
         }
     
     except Exception as e:
-        print(f"Analysis error: {e}")
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        traceback.print_exc()
+        print(f"[v0] Analysis error: {error_msg}")
         return {
             'success': False,
-            'error': str(e),
+            'error': error_msg,
             'chords': [],
             'sections': []
         }
