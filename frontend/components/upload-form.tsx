@@ -80,7 +80,7 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
 
       // Send to Python backend for real chord detection
       console.log('[v0] Sending audio to backend for analysis...')
-      const response = await fetch('/api/analyze-audio', {
+      const response = await fetch('http://localhost:8000/analyze-audio', {
         method: 'POST',
         body: formData,
       })
