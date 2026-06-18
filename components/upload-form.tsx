@@ -70,39 +70,46 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
     setIsLoading(true)
 
     try {
-      // Get real audio duration
+      // Get real audio duration first
       const duration = await getAudioDuration(file)
       console.log('[v0] Audio duration:', duration)
 
-      // Generate chord timestamps based on actual duration
-      // Spread chords evenly throughout the song
-      const numChords = Math.max(5, Math.min(12, Math.floor(duration / 4)))
-      const chordSequence = ['C', 'G', 'Am', 'F', 'D', 'Dm', 'A', 'E', 'B', 'Em', 'Bm']
-      const mockChords = Array.from({ length: numChords }, (_, i) => ({
-        name: chordSequence[i % chordSequence.length],
-        time: (i / numChords) * duration,
-      }))
+      // Create FormData for file upload
+      const formData = new FormData()
+      formData.append('file', file)
 
-      // Generate sections based on duration
-      const sectionDuration = duration / 3
-      const mockSections = [
-        { name: 'Intro', startTime: 0, endTime: sectionDuration * 0.5 },
-        { name: 'Verse', startTime: sectionDuration * 0.5, endTime: sectionDuration * 1.5 },
-        { name: 'Chorus', startTime: sectionDuration * 1.5, endTime: duration },
-      ]
+      // Send to Python backend for real chord detection
+      console.log('[v0] Sending audio to backend for analysis...')
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+      console.log('[v0] Backend URL:', backendUrl)
+      const response = await fetch(`${backendUrl}/analyze-audio`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`Analysis failed: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      console.log('[v0] Analysis result:', result)
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to analyze audio')
+      }
 
       // Create blob URL for audio playback
       const audioUrl = URL.createObjectURL(file)
 
-      // Store in localStorage
+      // Store in localStorage with real detected chords
       const lesson = {
         id: Date.now().toString(),
         title: title.trim(),
         artist: artist.trim() || 'Unknown Artist',
-        chords: mockChords,
-        sections: mockSections,
+        chords: result.chords || [],
+        sections: result.sections || [],
         audioUrl, // Store the blob URL
-        duration, // Store actual duration
+        duration: result.duration || duration, // Use duration from analysis
         uploadedAt: new Date().toISOString(),
       }
 
@@ -116,7 +123,8 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
 
       onSuccess()
     } catch (err) {
-      setError('Failed to analyze the audio file. Please try again.')
+      const errorMsg = err instanceof Error ? err.message : 'Failed to analyze the audio file'
+      setError(errorMsg)
       console.error('[v0] Upload error:', err)
     } finally {
       setIsLoading(false)
