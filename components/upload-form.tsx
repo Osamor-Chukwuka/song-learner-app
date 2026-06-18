@@ -78,11 +78,9 @@ export function UploadForm({ onSuccess }: UploadFormProps) {
       const formData = new FormData()
       formData.append('file', file)
 
-      // Send to Python backend for real chord detection
-      console.log('[v0] Sending audio to backend for analysis...')
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
-      console.log('[v0] Backend URL:', backendUrl)
-      const response = await fetch(`${backendUrl}/analyze-audio`, {
+      // Send to Next.js API route (which forwards to Python backend)
+      console.log('[v0] Sending audio to API route for analysis...')
+      const response = await fetch('/api/analyze-audio', {
         method: 'POST',
         body: formData,
       })

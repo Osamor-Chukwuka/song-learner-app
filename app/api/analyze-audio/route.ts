@@ -28,8 +28,11 @@ export async function POST(request: Request) {
 
     console.log('[v0] Forwarding to Python backend...')
 
-    // Forward to the Python backend
-    const backendResponse = await fetch('http://localhost:8000/analyze-audio', {
+    // Forward to the Python backend on 127.0.0.1
+    const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8000'
+    console.log('[v0] Backend URL:', backendUrl)
+    
+    const backendResponse = await fetch(`${backendUrl}/analyze-audio`, {
       method: 'POST',
       body: backendFormData,
       timeout: 120000, // 2 minute timeout for analysis
