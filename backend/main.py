@@ -4,9 +4,8 @@ import librosa
 import numpy as np
 import io
 import json
-from typing import List, Tuple
+from typing import List
 from scipy import signal
-from scipy.ndimage import median_filter
 
 app = fastapi.FastAPI()
 
@@ -71,175 +70,103 @@ def preprocess_audio(audio: np.ndarray, sr: int) -> np.ndarray:
     return audio
 
 
-def compute_chroma_with_viterbi(audio: np.ndarray, sr: int, hop_length: int = 512) -> Tuple[np.ndarray, np.ndarray]:
+def detect_chords_from_audio(audio_data: bytes, sr: int = 22050, hop_length: int = 2048) -> List[dict]:
     """
-    Compute chroma features and apply Viterbi smoothing for stability.
-    
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-        hop_length: Hop length for STFT
-    
-    Returns:
-        Smoothed chroma features and frame times
-    """
-    # Compute CENS chroma (Chroma Energy Normalized Statistics)
-    chroma = librosa.feature.chroma_cens(y=audio, sr=sr, hop_length=hop_length)
-    
-    # Normalize chroma
-    chroma = np.maximum(chroma, 0)
-    chroma = chroma / (np.sum(chroma, axis=0, keepdims=True) + 1e-10)
-    
-    # Apply median filtering along time axis for temporal smoothing
-    # This reduces sudden jumps in chroma values
-    for i in range(12):
-        chroma[i, :] = median_filter(chroma[i, :], size=7)
-    
-    # Re-normalize after filtering
-    chroma = chroma / (np.sum(chroma, axis=0, keepdims=True) + 1e-10)
-    
-    return chroma
-
-
-def viterbi_decode_chords(chroma: np.ndarray) -> np.ndarray:
-    """
-    Apply Viterbi algorithm to find the most likely chord sequence.
-    This ensures smooth, realistic chord transitions.
-    
-    Args:
-        chroma: Chroma feature matrix (12 x time_frames)
-    
-    Returns:
-        Chord indices for each frame
-    """
-    num_frames = chroma.shape[1]
-    num_chords = len(CHORD_NAMES)
-    
-    # Compute observation probabilities for each chord
-    obs_prob = np.zeros((num_frames, num_chords))
-    
-    for frame_idx in range(num_frames):
-        chroma_frame = chroma[:, frame_idx]
-        
-        for chord_idx, chord_name in enumerate(CHORD_NAMES):
-            intervals = CHORD_TEMPLATES[chord_name]
-            
-            # Compute correlation with chord template
-            score = 0
-            for interval in intervals:
-                score += chroma_frame[interval % 12]
-            
-            # Normalize by chord size
-            score /= len(intervals)
-            
-            # Apply confidence weighting
-            obs_prob[frame_idx, chord_idx] = score
-    
-    # Apply smoothing to observation probabilities
-    obs_prob = np.maximum(obs_prob, 0.01)
-    
-    # Viterbi algorithm with transition probabilities
-    viterbi = np.zeros((num_frames, num_chords))
-    backpointer = np.zeros((num_frames, num_chords), dtype=int)
-    
-    # Initialize first frame
-    viterbi[0, :] = obs_prob[0, :]
-    
-    # Transition matrix: favor staying in same chord, penalize frequent changes
-    transition = np.ones((num_chords, num_chords)) * 0.1
-    np.fill_diagonal(transition, 1.0)  # Staying in same chord is more likely
-    
-    # Forward pass
-    for frame_idx in range(1, num_frames):
-        for chord_idx in range(num_chords):
-            # Compute probability from all previous states
-            prev_scores = viterbi[frame_idx - 1, :] * transition[:, chord_idx]
-            
-            # Take the maximum
-            backpointer[frame_idx, chord_idx] = np.argmax(prev_scores)
-            viterbi[frame_idx, chord_idx] = np.max(prev_scores) * obs_prob[frame_idx, chord_idx]
-    
-    # Backtrack to find best path
-    path = np.zeros(num_frames, dtype=int)
-    path[-1] = np.argmax(viterbi[-1, :])
-    
-    for frame_idx in range(num_frames - 2, -1, -1):
-        path[frame_idx] = backpointer[frame_idx + 1, path[frame_idx + 1]]
-    
-    return path
-
-
-def detect_chords_from_audio(audio_data: bytes, sr: int = 22050, hop_length: int = 512) -> List[dict]:
-    """
-    Detect chords from audio data using advanced preprocessing and Viterbi smoothing.
+    Detect chords from audio data using fast chroma feature analysis.
     
     Args:
         audio_data: Raw audio bytes
         sr: Sample rate (default 22050 Hz)
-        hop_length: Hop length for STFT
+        hop_length: Hop length for STFT (larger for faster processing)
     
     Returns:
         List of detected chords with timing information
     """
     try:
-        # Load audio from bytes
+        # Load audio from bytes with lower resolution for speed
+        print("[v0] Loading audio...")
         audio, sr = librosa.load(io.BytesIO(audio_data), sr=sr)
         duration = librosa.get_duration(y=audio, sr=sr)
+        print(f"[v0] Audio loaded: {duration}s at {sr}Hz")
         
-        # Preprocess audio for better harmonic content isolation
-        audio = preprocess_audio(audio, sr)
+        # Use faster chroma computation (standard chroma instead of CENS)
+        print("[v0] Computing chroma features...")
+        chroma = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=hop_length, n_chroma=12)
         
-        # Compute chroma features with temporal smoothing
-        chroma = compute_chroma_with_viterbi(audio, sr, hop_length)
+        # Normalize chroma
+        chroma = np.maximum(chroma, 0.01)
+        chroma = chroma / (np.sum(chroma, axis=0, keepdims=True) + 1e-10)
         
-        # Apply Viterbi decoding for smooth chord sequence
-        chord_path = viterbi_decode_chords(chroma)
+        # Simple moving average smoothing (much faster than median filter)
+        print("[v0] Smoothing chroma features...")
+        window_size = 5
+        for i in range(12):
+            chroma[i, :] = np.convolve(chroma[i, :], np.ones(window_size)/window_size, mode='same')
         
-        # Extract chord changes with minimum duration requirement
+        # Re-normalize
+        chroma = chroma / (np.sum(chroma, axis=0, keepdims=True) + 1e-10)
+        
+        # Simple chord detection without Viterbi (much faster)
+        print("[v0] Detecting chords...")
         detected_chords = []
-        frame_length = len(chord_path)
+        num_frames = chroma.shape[1]
         frames_per_second = sr / hop_length
         
-        # Minimum chord duration: 0.5 seconds
-        min_chord_frames = max(1, int(frames_per_second * 0.5))
-        
-        last_chord_idx = -1
-        last_chord_change_frame = 0
-        
-        for frame_idx in range(frame_length):
-            current_chord_idx = chord_path[frame_idx]
+        # Chord probabilities for each frame
+        frame_chords = []
+        for frame_idx in range(num_frames):
+            chroma_frame = chroma[:, frame_idx]
+            best_chord_idx = 0
+            best_score = 0
             
-            # Check if chord changed and minimum duration has passed
-            if current_chord_idx != last_chord_idx and (frame_idx - last_chord_change_frame) >= min_chord_frames:
-                time = (frame_idx / frames_per_second)
-                if time <= duration:
-                    chord_name = CHORD_NAMES[current_chord_idx]
-                    
-                    # Compute confidence for this chord region
-                    region_start = max(0, frame_idx - int(frames_per_second * 0.25))
-                    region_end = min(frame_length, frame_idx + int(frames_per_second * 0.25))
-                    
-                    confidence = 0
-                    for idx in range(region_start, region_end):
-                        intervals = CHORD_TEMPLATES[chord_name]
-                        chroma_frame = chroma[:, idx]
-                        score = sum(chroma_frame[interval % 12] for interval in intervals) / len(intervals)
-                        confidence += score
-                    
-                    confidence /= (region_end - region_start)
-                    
-                    detected_chords.append({
-                        'name': chord_name,
-                        'time': round(time, 2),
-                        'confidence': round(float(min(confidence, 1.0)), 3)
-                    })
-                    
-                    last_chord_idx = current_chord_idx
-                    last_chord_change_frame = frame_idx
+            for chord_idx, chord_name in enumerate(CHORD_NAMES):
+                intervals = CHORD_TEMPLATES[chord_name]
+                score = sum(chroma_frame[interval % 12] for interval in intervals) / len(intervals)
+                if score > best_score:
+                    best_score = score
+                    best_chord_idx = chord_idx
+            
+            frame_chords.append((best_chord_idx, best_score))
+        
+        # Extract chord changes
+        last_chord_idx = -1
+        min_chord_duration_frames = max(1, int(frames_per_second * 1.0))  # 1 second minimum
+        consecutive_frames = 0
+        
+        for frame_idx in range(num_frames):
+            current_chord_idx, confidence = frame_chords[frame_idx]
+            
+            if current_chord_idx == last_chord_idx:
+                consecutive_frames += 1
+            else:
+                # If we've had enough consecutive frames of a chord, record it
+                if last_chord_idx >= 0 and consecutive_frames >= min_chord_duration_frames:
+                    time = ((frame_idx - consecutive_frames) / frames_per_second)
+                    if time <= duration:
+                        chord_name = CHORD_NAMES[last_chord_idx]
+                        detected_chords.append({
+                            'name': chord_name,
+                            'time': round(time, 2),
+                            'confidence': 0.6  # Simplified confidence
+                        })
+                
+                last_chord_idx = current_chord_idx
+                consecutive_frames = 1
+        
+        # Add final chord if it lasted long enough
+        if last_chord_idx >= 0 and consecutive_frames >= min_chord_duration_frames:
+            time = ((num_frames - consecutive_frames) / frames_per_second)
+            if time <= duration:
+                chord_name = CHORD_NAMES[last_chord_idx]
+                detected_chords.append({
+                    'name': chord_name,
+                    'time': round(time, 2),
+                    'confidence': 0.6
+                })
         
         # Ensure we have at least some chords
         if not detected_chords:
-            # If detection failed, use a safe fallback with longer sections
+            print("[v0] No chords detected, using defaults")
             num_chords = max(3, int(duration / 8))
             default_progression = ['C', 'G', 'Am', 'F']
             for i in range(num_chords):
@@ -247,13 +174,16 @@ def detect_chords_from_audio(audio_data: bytes, sr: int = 22050, hop_length: int
                 detected_chords.append({
                     'name': default_progression[i % len(default_progression)],
                     'time': round(chord_time, 2),
-                    'confidence': 0.4
+                    'confidence': 0.5
                 })
         
+        print(f"[v0] Detected {len(detected_chords)} chord changes")
         return detected_chords
     
     except Exception as e:
-        print(f"Error detecting chords: {e}")
+        print(f"[v0] Error detecting chords: {e}")
+        import traceback
+        traceback.print_exc()
         # Return a safe default
         return [
             {'name': 'C', 'time': 0, 'confidence': 0.4},
