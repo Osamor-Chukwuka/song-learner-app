@@ -128,10 +128,11 @@ def detect_chords_from_audio(audio_data: bytes, sr: int = 22050, hop_length: int
             
             frame_chords.append((best_chord_idx, best_score))
         
-        # Extract chord changes
+        # Extract chord changes with accurate timing
         last_chord_idx = -1
-        min_chord_duration_frames = max(1, int(frames_per_second * 1.0))  # 1 second minimum
+        min_chord_duration_frames = max(1, int(frames_per_second * 0.5))  # 0.5 second minimum
         consecutive_frames = 0
+        chord_start_frame = 0
         
         for frame_idx in range(num_frames):
             current_chord_idx, confidence = frame_chords[frame_idx]
@@ -141,27 +142,30 @@ def detect_chords_from_audio(audio_data: bytes, sr: int = 22050, hop_length: int
             else:
                 # If we've had enough consecutive frames of a chord, record it
                 if last_chord_idx >= 0 and consecutive_frames >= min_chord_duration_frames:
-                    time = ((frame_idx - consecutive_frames) / frames_per_second)
+                    # Time is when the chord actually started
+                    time = chord_start_frame / frames_per_second
                     if time <= duration:
                         chord_name = CHORD_NAMES[last_chord_idx]
                         detected_chords.append({
                             'name': chord_name,
                             'time': round(time, 2),
-                            'confidence': 0.6  # Simplified confidence
+                            'confidence': 0.65
                         })
                 
+                # New chord starts here
+                chord_start_frame = frame_idx
                 last_chord_idx = current_chord_idx
                 consecutive_frames = 1
         
         # Add final chord if it lasted long enough
         if last_chord_idx >= 0 and consecutive_frames >= min_chord_duration_frames:
-            time = ((num_frames - consecutive_frames) / frames_per_second)
+            time = chord_start_frame / frames_per_second
             if time <= duration:
                 chord_name = CHORD_NAMES[last_chord_idx]
                 detected_chords.append({
                     'name': chord_name,
                     'time': round(time, 2),
-                    'confidence': 0.6
+                    'confidence': 0.65
                 })
         
         # Ensure we have at least some chords

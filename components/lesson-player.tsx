@@ -70,17 +70,27 @@ export function LessonPlayer({ lesson }: LessonPlayerProps) {
     }
   }, [currentTime, lesson])
 
-  // Generate guide audio for current chord
+  // Generate guide audio for current chord on change
+  const lastChordRef = useRef<string | null>(null)
+  
   useEffect(() => {
-    if (currentChord && guideAudioRef.current && isPlaying) {
+    // Only generate new guide audio when chord actually changes
+    if (currentChord && guideAudioRef.current && isPlaying && currentChord !== lastChordRef.current) {
+      console.log('[v0] Generating guide audio for chord:', currentChord)
+      lastChordRef.current = currentChord
+      
       // Generate new guide audio for current chord
-      const audioBuffer = generateChordAudio(currentChord, 2)
+      const audioBuffer = generateChordAudio(currentChord, 1.5)
       const blob = new Blob([audioBuffer], { type: 'audio/wav' })
       const url = URL.createObjectURL(blob)
       guideAudioRef.current.src = url
-      guideAudioRef.current.play().catch(() => {
-        // Silent catch - may fail if guide is disabled
-      })
+      
+      // Play immediately when chord changes
+      setTimeout(() => {
+        guideAudioRef.current?.play().catch(() => {
+          console.log('[v0] Guide audio playback blocked or disabled')
+        })
+      }, 100)
     }
   }, [currentChord, isPlaying])
 
